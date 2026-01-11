@@ -3,12 +3,13 @@ const STORAGE_KEY = "provocations_settings_v1";
 const DEFAULT_SETTINGS = {
   provider: "gemini",
   model: "gemini-3-flash",
+  deepModel: "gemini-3-pro-preview",
   liveModel: "gemini-2.5-flash-native-audio-preview-12-2025",
   apiKey: "",
   enableSearchGrounding: true,
   autoOn: true,
-  autoGenerate: false,
-  inputMode: "frames",
+  autoGenerate: true,
+  inputMode: "youtube_url",
   frameIntervalSec: 1,
   maxFrames: 2,
   maxProvocations: 12,
@@ -34,9 +35,10 @@ async function loadDevSettings() {
 async function getSettings() {
   const result = await chrome.storage.local.get(STORAGE_KEY);
   const stored = result[STORAGE_KEY];
-  if (stored) return stored;
+  if (stored && typeof stored === "object") return { ...DEFAULT_SETTINGS, ...stored };
   const dev = await loadDevSettings();
-  return dev ?? DEFAULT_SETTINGS;
+  if (dev && typeof dev === "object") return { ...DEFAULT_SETTINGS, ...dev };
+  return DEFAULT_SETTINGS;
 }
 
 function asText(err) {
@@ -248,7 +250,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       if (message?.type === "provocations:generate") {
         const senderUrl = _sender?.url ?? "";
         const allowed =
-          senderUrl.startsWith("https://www.youtube.com/watch") || senderUrl.startsWith("https://m.youtube.com/watch");
+          senderUrl.startsWith("https://www.youtube.com/watch") ||
+          senderUrl.startsWith("https://youtube.com/watch") ||
+          senderUrl.startsWith("https://m.youtube.com/watch");
         if (!allowed) throw new Error("Generate requests are only allowed from YouTube watch pages.");
 
         const settings = await getSettings();
@@ -272,7 +276,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       if (message?.type === "provocations:streamGenerate") {
         const senderUrl = _sender?.url ?? "";
         const allowed =
-          senderUrl.startsWith("https://www.youtube.com/watch") || senderUrl.startsWith("https://m.youtube.com/watch");
+          senderUrl.startsWith("https://www.youtube.com/watch") ||
+          senderUrl.startsWith("https://youtube.com/watch") ||
+          senderUrl.startsWith("https://m.youtube.com/watch");
         if (!allowed) throw new Error("Stream requests are only allowed from YouTube watch pages.");
 
         const tabId = _sender?.tab?.id;

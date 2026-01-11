@@ -33,18 +33,20 @@ async function main() {
 
   const apiKey = (env.GEMINI_API_KEY ?? "").trim();
   const model = (env.GEMINI_MODEL ?? "gemini-3-flash").trim();
+  const deepModel = (env.GEMINI_DEEP_MODEL ?? "gemini-3-pro-preview").trim();
   if (!apiKey) throw new Error("GEMINI_API_KEY is empty in .env");
   if (!model) throw new Error("GEMINI_MODEL is empty in .env");
 
   const devSettings = {
     provider: "gemini",
     model,
+    deepModel,
     liveModel: "gemini-2.5-flash-native-audio-preview-12-2025",
     apiKey,
     enableSearchGrounding: true,
     autoOn: true,
-    autoGenerate: false,
-    inputMode: "frames",
+    autoGenerate: true,
+    inputMode: "youtube_url",
     frameIntervalSec: 1,
     maxFrames: 2,
     maxProvocations: 12,

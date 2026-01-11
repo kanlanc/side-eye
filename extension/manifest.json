@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Provocations (YouTube)",
   "version": "0.1.0",
-  "description": "Injects a thinking panel into YouTube to generate provocations and chat grounded in video frames (transcript optional).",
+  "description": "Injects a thinking panel into YouTube to generate provocations and chat grounded in the actual video (captions optional).",
   "action": {
     "default_title": "Provocations"
   },
@@ -10,6 +10,10 @@
   "permissions": ["storage"],
   "host_permissions": [
     "https://www.youtube.com/*",
+    "https://youtube.com/*",
+    "https://m.youtube.com/*",
+    "https://i.ytimg.com/*",
+    "https://*.ytimg.com/*",
     "https://generativelanguage.googleapis.com/*"
   ],
   "background": {
@@ -18,7 +22,7 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://www.youtube.com/*"],
+      "matches": ["https://www.youtube.com/*", "https://youtube.com/*", "https://m.youtube.com/*"],
       "js": ["contentScript.js"],
       "run_at": "document_idle"
     }
@@ -26,7 +30,7 @@
   "web_accessible_resources": [
     {
       "resources": ["injected.js"],
-      "matches": ["https://www.youtube.com/*"]
+      "matches": ["https://www.youtube.com/*", "https://youtube.com/*", "https://m.youtube.com/*"]
     }
   ]
 }

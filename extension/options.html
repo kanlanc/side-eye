@@ -23,9 +23,15 @@
         </label>
 
         <label class="field">
-          <div class="label">Background model (structured)</div>
+          <div class="label">Quick model (fast)</div>
           <input id="model" placeholder="e.g. gemini-3-flash" autocomplete="off" />
-          <div class="hint">Used for provocations + richer context (supports structured JSON outputs).</div>
+          <div class="hint">Used for first-pass provocations (fast).</div>
+        </label>
+
+        <label class="field">
+          <div class="label">Deep model (slow, richer)</div>
+          <input id="deepModel" placeholder="e.g. gemini-3-pro-preview" autocomplete="off" />
+          <div class="hint">Optional. Runs after the quick pass to refine provocations and context.</div>
         </label>
 
         <label class="field">
@@ -74,11 +80,12 @@
         <label class="field">
           <div class="label">Input mode</div>
           <select id="inputMode">
-            <option value="frames">Video frames (recommended)</option>
+            <option value="youtube_url">Full video via YouTube URL (recommended)</option>
+            <option value="frames">Video frames (fallback)</option>
             <option value="frames+transcript">Video frames + transcript</option>
             <option value="transcript">Transcript only</option>
           </select>
-          <div class="hint">Frames avoid relying on captions, but can cost more tokens.</div>
+          <div class="hint">YouTube URL mode avoids caption dependence. Frames are a fallback.</div>
         </label>
 
         <label class="field">

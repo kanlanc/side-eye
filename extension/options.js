@@ -8,22 +8,24 @@ function $(id) {
 
 async function loadSettings() {
   const result = await chrome.storage.local.get(STORAGE_KEY);
-  return (
-    result[STORAGE_KEY] ?? {
-      provider: "gemini",
-      model: "gemini-3-flash",
-      liveModel: "gemini-2.5-flash-native-audio-preview-12-2025",
-      apiKey: "",
-      enableSearchGrounding: true,
-      autoOn: true,
-      autoGenerate: false,
-      inputMode: "frames",
-      frameIntervalSec: 1,
-      maxFrames: 2,
-      maxProvocations: 12,
-      maxTranscriptChars: 12000
-    }
-  );
+  const defaults = {
+    provider: "gemini",
+    model: "gemini-3-flash",
+    deepModel: "gemini-3-pro-preview",
+    liveModel: "gemini-2.5-flash-native-audio-preview-12-2025",
+    apiKey: "",
+    enableSearchGrounding: true,
+    autoOn: true,
+    autoGenerate: true,
+    inputMode: "youtube_url",
+    frameIntervalSec: 1,
+    maxFrames: 2,
+    maxProvocations: 12,
+    maxTranscriptChars: 12000
+  };
+  const stored = result[STORAGE_KEY];
+  if (!stored || typeof stored !== "object") return defaults;
+  return { ...defaults, ...stored };
 }
 
 async function saveSettings(next) {
@@ -40,12 +42,13 @@ async function main() {
 
   $("provider").value = settings.provider ?? "gemini";
   $("model").value = settings.model ?? "gemini-3-flash";
+  $("deepModel").value = settings.deepModel ?? "gemini-3-pro-preview";
   $("liveModel").value = settings.liveModel ?? "gemini-2.5-flash-native-audio-preview-12-2025";
   $("apiKey").value = settings.apiKey ?? "";
   $("enableSearchGrounding").checked = Boolean(settings.enableSearchGrounding);
   $("autoOn").checked = Boolean(settings.autoOn);
   $("autoGenerate").checked = Boolean(settings.autoGenerate);
-  $("inputMode").value = settings.inputMode ?? "frames";
+  $("inputMode").value = settings.inputMode ?? "youtube_url";
   $("frameIntervalSec").value = String(settings.frameIntervalSec ?? 5);
   $("maxFrames").value = String(settings.maxFrames ?? 6);
   $("maxProvocations").value = String(settings.maxProvocations ?? 12);
@@ -59,6 +62,7 @@ async function main() {
     const next = {
       provider: $("provider").value,
       model: $("model").value.trim(),
+      deepModel: $("deepModel").value.trim(),
       liveModel: $("liveModel").value.trim(),
       apiKey: $("apiKey").value.trim(),
       enableSearchGrounding: $("enableSearchGrounding").checked,

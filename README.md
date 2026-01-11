@@ -2,8 +2,9 @@
 
 YouTube-only Chrome extension that injects a lightweight side panel to:
 
-- Generate **provocations** (thought-provoking critiques/questions) grounded in video **frames** (transcript optional).
-- Chat about the video grounded in frames + your running context (transcript optional).
+- Generate **provocations** (thought-provoking critiques/questions) grounded in the **actual video** (audio + visuals).
+- Reveal those cards **as you watch** (time-synced), instead of dumping everything at once.
+- Chat about the video grounded in your saved context.
 
 ## Load it in Chrome
 
@@ -18,9 +19,11 @@ YouTube-only Chrome extension that injects a lightweight side panel to:
 2. Click **Extension options**
 3. Set:
    - **API key**
-   - **Background model (structured)** (example: `gemini-3-flash`)
+   - **Quick model (fast)** (example: `gemini-3-flash`)
+   - **Deep model (slow, richer)** (example: `gemini-3-pro-preview`)
    - **Live model (low-latency)** (example: `gemini-2.5-flash-native-audio-preview-12-2025`)
    - (Optional) **Enable Google Search grounding** for richer background context
+   - **Input mode**: `Full video via YouTube URL (recommended)`
 
 ### Optional: BYOK via `.env` (dev convenience)
 
@@ -34,7 +37,8 @@ Chrome extensions can’t read your shell environment directly. For local develo
 
 - Go to any `youtube.com/watch?...` page.
 - Click **Provocations** (top-right) to open the panel.
-- Click **Generate** (frames are used by default; transcript is optional).
+- Click **Generate** (or enable **Auto-generate** in options).
+- Cards appear automatically as you hit their timestamps; use **Jump** to seek.
 
 ### Build context (recommended)
 
@@ -54,11 +58,13 @@ Chrome extensions can’t read your shell environment directly. For local develo
 
 ## Notes / limitations
 
-- The model cannot “watch a YouTube URL” by itself; it only sees what we provide (frames + optional transcript).
+- YouTube URL mode relies on Gemini being able to fetch/understand that URL; if it fails, switch Input mode to **Video frames**.
 - Some videos may require starting playback once before duration-based features (like Quick scan) work reliably.
 
 ## Video-first mode (no captions required)
 
 In **Extension options**, set **Input mode** to:
-- `Video frames (recommended)` to generate from live frames captured from the `<video>` element.
+- `Full video via YouTube URL (recommended)` to analyze the full video and produce timestamped provocations.
+- `Video frames (fallback)` to generate from live frames captured from the `<video>` element.
 - `Video frames + transcript` to use both when captions are available.
+- `Transcript only` to use captions only.

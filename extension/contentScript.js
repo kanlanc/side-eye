@@ -11,7 +11,8 @@ function sleep(ms) {
 function isWatchPage() {
   try {
     const url = new URL(location.href);
-    return url.hostname === "www.youtube.com" && url.pathname === "/watch" && Boolean(url.searchParams.get("v"));
+    const hostOk = url.hostname === "www.youtube.com" || url.hostname === "youtube.com" || url.hostname === "m.youtube.com";
+    return hostOk && url.pathname === "/watch" && Boolean(url.searchParams.get("v"));
   } catch {
     return false;
   }
@@ -367,6 +368,24 @@ async function saveVideoContext(videoId, ctx) {
   await chrome.storage.local.set({ [key]: ctx });
 }
 
+async function pruneOldVideoContexts({ keep = 25 } = {}) {
+  try {
+    const all = await chrome.storage.local.get(null);
+    const entries = [];
+    for (const [key, value] of Object.entries(all)) {
+      if (!key.startsWith(VIDEO_CONTEXT_PREFIX)) continue;
+      if (!value || typeof value !== "object") continue;
+      const updatedAt = Number(value.updatedAt ?? value.createdAt ?? 0);
+      entries.push({ key, updatedAt: Number.isFinite(updatedAt) ? updatedAt : 0 });
+    }
+    entries.sort((a, b) => b.updatedAt - a.updatedAt);
+    const toRemove = entries.slice(Math.max(0, keep)).map((e) => e.key);
+    if (toRemove.length) await chrome.storage.local.remove(toRemove);
+  } catch {
+    // Best-effort only.
+  }
+}
+
 function jumpToMs(ms) {
   const video = document.querySelector("video");
   if (!video) return;
@@ -456,7 +475,15 @@ function dataUrlToBase64(dataUrl) {
 
 function ensurePanel(settings, dockContainer) {
   let root = document.getElementById(PANEL_ID);
-  if (root) return root;
+  if (root) {
+    const existingUi = root.__provocationsUi;
+    if (existingUi && typeof existingUi.setOpen === "function") return existingUi;
+    // Stale/partial root (e.g. content script reinjected); rebuild.
+    try {
+      root.remove();
+    } catch {}
+    root = null;
+  }
 
   root = document.createElement("div");
   root.id = PANEL_ID;
@@ -629,6 +656,12 @@ function ensurePanel(settings, dockContainer) {
     videoTitle: getVideoTitle(),
     videoUrl: getVideoUrl(),
     videoContext: null,
+    deck: [],
+    deckRevealedIds: new Set(),
+    deckNextIndex: 0,
+    revealListenerCleanup: null,
+    revealAttachTimer: null,
+    deepPassToken: 0,
     contextBusy: false,
     summaryBusy: false,
     contextTimer: null,
@@ -659,7 +692,11 @@ function ensurePanel(settings, dockContainer) {
   const goalInput = el("input", { placeholder: "Goal (optional): what are you trying to get from this video?" }, []);
   const genBtn = el("button", { class: "btn primary", text: "Generate" }, []);
   const refreshBtn = el("button", { class: "btn", text: "Load transcript" }, []);
-  if ((state.settings?.inputMode ?? "frames") === "frames") refreshBtn.style.display = "none";
+  {
+    const mode = state.settings?.inputMode ?? "frames";
+    const wantsTranscript = mode === "transcript" || mode === "frames+transcript";
+    if (!wantsTranscript) refreshBtn.style.display = "none";
+  }
   provControls.append(goalInput, genBtn, refreshBtn);
   const provFeed = el("div", { class: "feed" }, []);
   secProv.append(provControls, provFeed);
@@ -667,7 +704,7 @@ function ensurePanel(settings, dockContainer) {
   const secChat = el("div", { class: "section" }, []);
   const chatFeed = el("div", { class: "feed" }, []);
   const chatInputRow = el("div", { class: "chatInputRow" }, []);
-  const chatInput = el("textarea", { placeholder: "Ask about this video (uses frames + running context; transcript optional)…" }, []);
+  const chatInput = el("textarea", { placeholder: "Ask about this video (uses saved context)…" }, []);
   const chatSend = el("button", { class: "btn primary", text: "Send" }, []);
   chatInputRow.append(chatInput, chatSend);
   secChat.append(chatFeed, chatInputRow);
@@ -704,6 +741,7 @@ function ensurePanel(settings, dockContainer) {
           observations: []
         };
         await saveVideoContext(state.videoId, state.videoContext);
+        pruneOldVideoContexts({ keep: 25 }).catch(() => {});
       }
     } catch (err) {
       console.warn("[provocations] Failed to init video context:", err);
@@ -1018,10 +1056,41 @@ ${stampList}
     root.style.width = state.open ? `var(${SIDEBAR_WIDTH_VAR}, min(420px, 40vw))` : "auto";
     setPageRightDocking(state.open);
     if (state.open) {
-      initVideoContext().catch(() => {});
-      startContextLoop();
+      initVideoContext()
+        .then(() => {
+          const mode = state.settings?.inputMode ?? "frames";
+          if (mode === "youtube_url") {
+            const deck = state.videoContext?.deck;
+            if (Array.isArray(deck) && deck.length) {
+              setDeckAndRender(deck, { intro: `${deck.length} provocations loaded — play to reveal them as you watch.` });
+            }
+          }
+        })
+        .catch(() => {});
+
+      const mode = state.settings?.inputMode ?? "frames";
+      if (mode === "youtube_url") {
+        stopContextLoop();
+        stopRevealLoop();
+        // The <video> element may appear after the panel opens; retry a few times.
+        let tries = 0;
+        const tryAttach = () => {
+          if (!state.open) return;
+          state.revealAttachTimer = null;
+          startRevealLoop();
+          if (state.revealListenerCleanup) return;
+          tries += 1;
+          if (tries >= 10) return;
+          state.revealAttachTimer = setTimeout(tryAttach, 600);
+        };
+        tryAttach();
+      } else {
+        stopRevealLoop();
+        startContextLoop();
+      }
     } else {
       stopContextLoop();
+      stopRevealLoop();
     }
   }
 
@@ -1114,6 +1183,114 @@ ${stampList}
           )
         ])
       );
+    }
+  }
+
+  function getCurrentVideoTimeMs() {
+    const video = document.querySelector("video");
+    if (!video) return 0;
+    const ms = Math.floor((Number(video.currentTime) || 0) * 1000);
+    return Number.isFinite(ms) ? Math.max(0, ms) : 0;
+  }
+
+  function provocationId(p) {
+    const tNum = Number(p?.tStartMs);
+    const t = Number.isFinite(tNum) ? Math.max(0, Math.floor(tNum)) : 0;
+    const type = String(p?.type ?? "").trim().slice(0, 32);
+    const title = String(p?.title ?? p?.headline ?? "").trim().slice(0, 120);
+    return `${t}:${type}:${title}`;
+  }
+
+  function normalizeProvocationDeck(items) {
+    const out = [];
+    const arr = Array.isArray(items) ? items : [];
+    for (const raw of arr) {
+      const tNum = Number(raw?.tStartMs);
+      const t = Number.isFinite(tNum) ? tNum : 0;
+      const p = {
+        id: typeof raw?.id === "string" && raw.id ? raw.id : provocationId(raw),
+        type: clampText(String(raw?.type ?? "Provocation"), 40),
+        title: clampText(String(raw?.title ?? raw?.headline ?? "Untitled"), 180),
+        prompt: clampText(String(raw?.prompt ?? raw?.text ?? "").trim(), 900),
+        excerpt: clampText(String(raw?.excerpt ?? "").trim(), 360),
+        tStartMs: Math.max(0, Math.floor(t))
+      };
+      if (!p.prompt) continue;
+      out.push(p);
+    }
+    out.sort((a, b) => (a.tStartMs ?? 0) - (b.tStartMs ?? 0));
+    return out;
+  }
+
+  function setDeckAndRender(deck, { intro } = {}) {
+    state.deck = normalizeProvocationDeck(deck);
+    state.deckRevealedIds.clear();
+    state.deckNextIndex = 0;
+
+    provFeed.replaceChildren();
+    if (!state.deck.length) {
+      addInfo(provFeed, "No provocations available yet. Click Generate.");
+      return;
+    }
+    addInfo(provFeed, intro || `${state.deck.length} provocations ready — play to reveal them as you watch.`);
+    revealDeckUpToMs(getCurrentVideoTimeMs());
+  }
+
+  function revealDeckUpToMs(currentMs) {
+    if (!state.deck.length) return;
+    const ms = Number.isFinite(currentMs) ? currentMs : 0;
+
+    let added = 0;
+    while (state.deckNextIndex < state.deck.length) {
+      const p = state.deck[state.deckNextIndex];
+      if ((p?.tStartMs ?? 0) > ms) break;
+      state.deckNextIndex += 1;
+      if (!p || !p.id || state.deckRevealedIds.has(p.id)) continue;
+      state.deckRevealedIds.add(p.id);
+      addProvocationCard(p);
+      added += 1;
+    }
+    if (added) provFeed.scrollTop = provFeed.scrollHeight;
+  }
+
+  function startRevealLoop() {
+    if (state.revealListenerCleanup) return;
+    const video = document.querySelector("video");
+    if (!video) return;
+
+    let lastWall = 0;
+    const onTick = () => {
+      if (!state.open) return;
+      const now = Date.now();
+      if (now - lastWall < 750) return;
+      lastWall = now;
+      revealDeckUpToMs(getCurrentVideoTimeMs());
+    };
+    const onSeeked = () => {
+      if (!state.open) return;
+      revealDeckUpToMs(getCurrentVideoTimeMs());
+    };
+
+    video.addEventListener("timeupdate", onTick);
+    video.addEventListener("seeked", onSeeked);
+    state.revealListenerCleanup = () => {
+      video.removeEventListener("timeupdate", onTick);
+      video.removeEventListener("seeked", onSeeked);
+      state.revealListenerCleanup = null;
+    };
+
+    // Initial reveal (e.g. if the user is mid-video already).
+    onSeeked();
+  }
+
+  function stopRevealLoop() {
+    try {
+      state.revealListenerCleanup?.();
+    } catch {}
+    state.revealListenerCleanup = null;
+    if (state.revealAttachTimer) {
+      clearTimeout(state.revealAttachTimer);
+      state.revealAttachTimer = null;
     }
   }
 
@@ -1351,22 +1528,32 @@ ${rawModelText}
     return await runModelJSON(prompt, { disableSearchGrounding: true });
   }
 
-  async function generateProvocations() {
+  async function generateProvocations({ reason = "manual" } = {}) {
     if (state.busy) return;
     state.busy = true;
     try {
       provFeed.replaceChildren();
 
       const goal = goalInput.value.trim();
-      addInfo(provFeed, "Generating provocations…");
+      addInfo(provFeed, reason === "auto" ? "Loading provocations…" : "Generating provocations…");
 
       if (!state.videoContext) await initVideoContext();
       const baseContext = state.videoContext?.summary ? String(state.videoContext.summary) : "";
 
       const inputMode = state.settings.inputMode ?? "frames";
       if (inputMode === "youtube_url") {
+        const cachedDeck = state.videoContext?.deck;
+        if (reason === "auto" && Array.isArray(cachedDeck) && cachedDeck.length) {
+          setDeckAndRender(cachedDeck, {
+            intro: `${cachedDeck.length} provocations loaded — play to reveal them as you watch.`
+          });
+          return;
+        }
+
+        const token = (state.deepPassToken += 1);
         const quickModel = state.settings?.model ? String(state.settings.model).trim() : "";
-        const requestedCount = Math.min(40, Math.max(12, Number(state.settings.maxProvocations ?? 24)));
+        const deepModel = state.settings?.deepModel ? String(state.settings.deepModel).trim() : "";
+        const requestedCount = Math.min(20, Math.max(6, Number(state.settings.maxProvocations ?? 12)));
         const video = document.querySelector("video");
         const durationMs =
           video && Number.isFinite(video.duration) && video.duration > 0 ? Math.floor(video.duration * 1000) : null;
@@ -1438,7 +1625,8 @@ Viewer goal (optional): ${goal ? JSON.stringify(goal) : "\"\""}
         const items = Array.isArray(data?.provocations) ? data.provocations : [];
         const normalized = items
           .map((p) => {
-            const tFromMs = Number.isFinite(p?.tStartMs) ? Number(p.tStartMs) : null;
+            const tNum = Number(p?.tStartMs);
+            const tFromMs = Number.isFinite(tNum) ? tNum : null;
             const tFromStr = tFromMs === null ? timestampToMs(p?.tStart ?? p?.timestamp ?? "") : null;
             const tStartMs = tFromMs ?? tFromStr;
             return {
@@ -1451,20 +1639,86 @@ Viewer goal (optional): ${goal ? JSON.stringify(goal) : "\"\""}
           })
           .filter((p) => p.prompt);
 
+        const deck = normalizeProvocationDeck(normalized).slice(0, requestedCount);
+
         if (state.videoContext) {
           state.videoContext.summary = summary || state.videoContext.summary || "";
           state.videoContext.updatedAt = Date.now();
           state.videoContext.lastSummaryAt = Date.now();
-          state.videoContext.deck = normalized;
+          state.videoContext.deck = deck;
+          state.videoContext.deckModel = quickModel || state.settings?.model || "";
+          state.videoContext.deckSource = "quick";
           await saveVideoContext(state.videoId, state.videoContext);
         }
 
-        provFeed.replaceChildren();
-        if (!normalized.length) {
-          addInfo(provFeed, "No provocations returned. Try regenerating or setting a goal.");
-          return;
+        setDeckAndRender(deck, {
+          intro: deepModel
+            ? `${deck.length} provocations ready (quick pass) — deep pass running in background.`
+            : `${deck.length} provocations ready — play to reveal them as you watch.`
+        });
+
+        if (deepModel && deepModel !== quickModel) {
+          void (async () => {
+            try {
+              const deepRaw = await runModelJSONFromParts({
+                parts,
+                modelOverride: deepModel,
+                disableSearchGrounding: false,
+                maxOutputTokens: 6144
+              });
+              if (token !== state.deepPassToken) return;
+
+              let deepData;
+              try {
+                deepData = parseJsonFromModelText(deepRaw);
+              } catch {
+                const cleaned = String(deepRaw ?? "").trim();
+                console.warn("[provocations] Deep pass returned non-JSON:", cleaned);
+                const repaired = await repairProvocationsJson({ rawModelText: cleaned });
+                deepData = parseJsonFromModelText(repaired);
+              }
+
+              const deepSummary =
+                typeof deepData?.summary === "string" ? deepData.summary.trim() : summary || state.videoContext?.summary || "";
+              const deepItems = Array.isArray(deepData?.provocations) ? deepData.provocations : [];
+              const deepNormalized = deepItems
+                .map((p) => {
+                  const tNum = Number(p?.tStartMs);
+                  const tFromMs = Number.isFinite(tNum) ? tNum : null;
+                  const tFromStr = tFromMs === null ? timestampToMs(p?.tStart ?? p?.timestamp ?? "") : null;
+                  const tStartMs = tFromMs ?? tFromStr;
+                  return {
+                    type: String(p?.type ?? "Provocation"),
+                    title: String(p?.title ?? p?.headline ?? "Untitled"),
+                    prompt: String(p?.prompt ?? p?.text ?? "").trim(),
+                    excerpt: String(p?.evidence ?? p?.excerpt ?? "").trim(),
+                    tStartMs: typeof tStartMs === "number" && Number.isFinite(tStartMs) ? tStartMs : 0
+                  };
+                })
+                .filter((p) => p.prompt);
+
+              const deepDeck = normalizeProvocationDeck(deepNormalized).slice(0, requestedCount);
+              if (!deepDeck.length) return;
+
+              if (state.videoContext) {
+                state.videoContext.summary = deepSummary || state.videoContext.summary || "";
+                state.videoContext.updatedAt = Date.now();
+                state.videoContext.lastSummaryAt = Date.now();
+                state.videoContext.deck = deepDeck;
+                state.videoContext.deckModel = deepModel;
+                state.videoContext.deckSource = "deep";
+                await saveVideoContext(state.videoId, state.videoContext);
+              }
+
+              setDeckAndRender(deepDeck, {
+                intro: `${deepDeck.length} provocations ready (deep pass) — play to reveal them as you watch.`
+              });
+            } catch (err) {
+              if (token !== state.deepPassToken) return;
+              console.warn("[provocations] Deep pass failed:", err);
+            }
+          })();
         }
-        for (const p of normalized) addProvocationCard(p);
         return;
       }
 
@@ -1659,7 +1913,7 @@ ${q}
   tabChat.addEventListener("click", () => setTab("chat"));
   tabCtx.addEventListener("click", () => setTab("context"));
   refreshBtn.addEventListener("click", refreshTranscript);
-  genBtn.addEventListener("click", generateProvocations);
+  genBtn.addEventListener("click", () => generateProvocations({ reason: "manual" }));
   chatSend.addEventListener("click", sendChat);
   chatInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) sendChat();
@@ -1688,31 +1942,63 @@ ${q}
   });
 
   function cleanup() {
+    // Cancel any in-flight background work tied to this UI instance.
+    try {
+      state.deepPassToken += 1;
+    } catch {}
     try {
       stopContextLoop();
+    } catch {}
+    try {
+      stopRevealLoop();
     } catch {}
     try {
       setPageRightDocking(false);
     } catch {}
   }
 
-  return { root, setOpen, refreshTranscript, generateProvocations, cleanup, handleStreamChunk };
+  const ui = { root, setOpen, refreshTranscript, generateProvocations, cleanup, handleStreamChunk };
+  root.__provocationsUi = ui;
+  return ui;
 }
 
 let activeUi = null;
+let mainRunning = false;
+let didAutoOpen = false;
+let didAutoGenerate = false;
+let didAutoLoadTranscript = false;
 
 async function main() {
   if (!isWatchPage()) return;
-  // Avoid double-injects during SPA navigation + content script reinjection.
-  if (document.getElementById(PANEL_ID)) return;
+  if (mainRunning) return;
+  mainRunning = true;
 
-  const settings = await getSettings().catch(() => null);
-  const ui = ensurePanel(settings ?? undefined, null);
-  activeUi = ui;
-  if (settings?.autoOn) ui.setOpen(true);
-  await sleep(500);
-  if ((settings?.inputMode ?? "frames") !== "frames") await ui.refreshTranscript();
-  if (settings?.autoGenerate) await ui.generateProvocations();
+  try {
+    const settings = await getSettings().catch(() => null);
+    const ui = ensurePanel(settings ?? undefined, null);
+    activeUi = ui;
+
+    if (settings?.autoOn && !didAutoOpen) {
+      didAutoOpen = true;
+      ui.setOpen(true);
+    }
+
+    const inputMode = settings?.inputMode ?? "frames";
+    const wantsTranscript = inputMode === "transcript" || inputMode === "frames+transcript";
+
+    await sleep(500);
+    if (wantsTranscript && !didAutoLoadTranscript) {
+      didAutoLoadTranscript = true;
+      await ui.refreshTranscript();
+    }
+
+    if (settings?.autoGenerate && !didAutoGenerate) {
+      didAutoGenerate = true;
+      await ui.generateProvocations({ reason: "auto" });
+    }
+  } finally {
+    mainRunning = false;
+  }
 }
 
 main().catch((err) => console.error("[provocations]", err));
@@ -1730,6 +2016,9 @@ let lastVideoId = isWatchPage() ? extractVideoId() : "";
 async function onNavigate() {
   if (!isWatchPage()) {
     lastVideoId = "";
+    didAutoOpen = false;
+    didAutoGenerate = false;
+    didAutoLoadTranscript = false;
     try {
       activeUi?.cleanup?.();
     } catch {}
@@ -1740,6 +2029,9 @@ async function onNavigate() {
   const next = extractVideoId();
   if (!next || next === lastVideoId) return;
   lastVideoId = next;
+  didAutoOpen = false;
+  didAutoGenerate = false;
+  didAutoLoadTranscript = false;
   try {
     activeUi?.cleanup?.();
   } catch {}
@@ -1751,6 +2043,26 @@ async function onNavigate() {
 window.addEventListener("yt-navigate-finish", () => {
   onNavigate().catch(() => {});
 });
+document.addEventListener(
+  "yt-navigate-finish",
+  () => {
+    onNavigate().catch(() => {});
+  },
+  true
+);
 window.addEventListener("popstate", () => {
   onNavigate().catch(() => {});
 });
+
+// Safety net: YouTube navigation events can be flaky; poll occasionally to ensure the panel exists on watch pages.
+if (window.__provocationsSafetyNetInterval) {
+  try {
+    clearInterval(window.__provocationsSafetyNetInterval);
+  } catch {}
+}
+window.__provocationsSafetyNetInterval = setInterval(() => {
+  if (!isWatchPage()) return;
+  if (!document.getElementById(PANEL_ID) || !activeUi) {
+    main().catch(() => {});
+  }
+}, 2000);

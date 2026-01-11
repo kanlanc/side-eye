@@ -1,0 +1,6 @@
+.DS_Store
+.env
+
+# Local dev settings for the extension (BYOK)
+extension/dev_settings.json
+

@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Provocations — Options</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main class="page">
+      <header class="header">
+        <h1>Provocations</h1>
+        <p class="sub">Configure your model settings. The extension runs on YouTube watch pages only.</p>
+      </header>
+
+      <section class="card">
+        <h2>Model</h2>
+        <label class="field">
+          <div class="label">Provider</div>
+          <select id="provider">
+            <option value="gemini">Gemini (Generative Language API)</option>
+          </select>
+        </label>
+
+        <label class="field">
+          <div class="label">Model name</div>
+          <input id="model" placeholder="e.g. gemini-3-flash" autocomplete="off" />
+          <div class="hint">Set this to the exact model ID in your Google AI Studio / Gemini API project.</div>
+        </label>
+
+        <label class="field">
+          <div class="label">API key</div>
+          <input id="apiKey" placeholder="AIza..." autocomplete="off" />
+          <div class="hint">
+            Stored in <code>chrome.storage.local</code> (not encrypted). Avoid using keys with high quotas/spending limits.
+            You can clear it anytime.
+          </div>
+        </label>
+
+        <label class="field row">
+          <input id="autoOn" type="checkbox" />
+          <div>
+            <div class="label">Auto-open panel</div>
+            <div class="hint">Shows the panel when you land on a video (you can toggle off per page).</div>
+          </div>
+        </label>
+
+        <label class="field row">
+          <input id="autoGenerate" type="checkbox" />
+          <div>
+            <div class="label">Auto-generate provocations</div>
+            <div class="hint">Runs once per page load when a transcript is available (may cost tokens).</div>
+          </div>
+        </label>
+
+        <label class="field">
+          <div class="label">Input mode</div>
+          <select id="inputMode">
+            <option value="frames">Video frames (recommended)</option>
+            <option value="frames+transcript">Video frames + transcript</option>
+            <option value="transcript">Transcript only</option>
+          </select>
+          <div class="hint">Frames avoid relying on captions, but can cost more tokens.</div>
+        </label>
+
+        <label class="field">
+          <div class="label">Frame interval (seconds)</div>
+          <input id="frameIntervalSec" type="number" min="1" max="30" step="1" />
+          <div class="hint">How often to capture a frame while generating.</div>
+        </label>
+
+        <label class="field">
+          <div class="label">Max frames per run</div>
+          <input id="maxFrames" type="number" min="1" max="12" step="1" />
+          <div class="hint">Total frames sent to the model per Generate.</div>
+        </label>
+
+        <label class="field">
+          <div class="label">Max provocations</div>
+          <input id="maxProvocations" type="number" min="3" max="30" step="1" />
+          <div class="hint">How many provocation cards to show per generation.</div>
+        </label>
+
+        <label class="field">
+          <div class="label">Max transcript characters</div>
+          <input id="maxTranscriptChars" type="number" min="2000" max="50000" step="500" />
+          <div class="hint">Limits how much transcript text is sent to the model.</div>
+        </label>
+
+        <div class="actions">
+          <button id="save" class="primary">Save</button>
+          <button id="clear" class="ghost">Clear API key</button>
+          <span id="status" class="status" aria-live="polite"></span>
+        </div>
+      </section>
+    </main>
+    <script src="options.js"></script>
+  </body>
+</html>

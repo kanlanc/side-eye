@@ -1,0 +1,12 @@
+{
+  "provider": "gemini",
+  "model": "gemini-3-flash",
+  "apiKey": "AIza...YOUR_KEY_HERE",
+  "autoOn": true,
+  "autoGenerate": false,
+  "inputMode": "frames",
+  "frameIntervalSec": 5,
+  "maxFrames": 6,
+  "maxProvocations": 12,
+  "maxTranscriptChars": 12000
+}

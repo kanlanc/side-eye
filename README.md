@@ -2,8 +2,8 @@
 
 YouTube-only Chrome extension that injects a lightweight side panel to:
 
-- Generate **provocations** (thought-provoking critiques/questions) grounded in the video transcript.
-- Chat about the video (also grounded in the transcript).
+- Generate **provocations** (thought-provoking critiques/questions) grounded in video **frames** (transcript optional).
+- Chat about the video grounded in frames + your running context (transcript optional).
 
 ## Load it in Chrome
 
@@ -18,7 +18,9 @@ YouTube-only Chrome extension that injects a lightweight side panel to:
 2. Click **Extension options**
 3. Set:
    - **API key**
-   - **Model name** (example placeholder: `gemini-3-flash`)
+   - **Background model (structured)** (example: `gemini-3-flash`)
+   - **Live model (low-latency)** (example: `gemini-2.5-flash-native-audio-preview-12-2025`)
+   - (Optional) **Enable Google Search grounding** for richer background context
 
 ### Optional: BYOK via `.env` (dev convenience)
 
@@ -32,7 +34,13 @@ Chrome extensions can’t read your shell environment directly. For local develo
 
 - Go to any `youtube.com/watch?...` page.
 - Click **Provocations** (top-right) to open the panel.
-- Click **Refresh transcript** then **Generate**.
+- Click **Generate** (frames are used by default; transcript is optional).
+
+### Build context (recommended)
+
+- Open the **Context** tab:
+  - Wait ~1 minute for the running summary to start filling in, or click **Summarize now**
+  - Use **Quick scan** to sample the video timeline (it scrubs the video and returns you back)
 
 ## Testing / debugging
 
@@ -41,14 +49,13 @@ Chrome extensions can’t read your shell environment directly. For local develo
   - Right-click → **Inspect** to see the content script logs
   - `chrome://extensions` → “Provocations (YouTube)” → **service worker** → **Inspect** to see Gemini/network errors
 - Quick sanity checks:
-  - Pick a video with captions, click **Refresh transcript**, confirm “Transcript loaded…”
   - Click **Generate**, confirm cards appear and **Jump** seeks the video
-  - Switch to **Chat**, ask a question and confirm it answers from transcript (not generic)
+  - Switch to **Chat**, ask a question and confirm it responds (look for `[provocations]` logs on failures)
 
 ## Notes / limitations
 
-- This uses YouTube caption tracks (transcripts). If a video has no captions, the extension will not generate anything.
-- The model is not given a URL and cannot “watch” the video by itself; it only sees the transcript text we extract.
+- The model cannot “watch a YouTube URL” by itself; it only sees what we provide (frames + optional transcript).
+- Some videos may require starting playback once before duration-based features (like Quick scan) work reliably.
 
 ## Video-first mode (no captions required)
 

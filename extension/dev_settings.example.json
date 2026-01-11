@@ -1,12 +1,14 @@
 {
   "provider": "gemini",
   "model": "gemini-3-flash",
+  "liveModel": "gemini-2.5-flash-native-audio-preview-12-2025",
   "apiKey": "AIza...YOUR_KEY_HERE",
+  "enableSearchGrounding": true,
   "autoOn": true,
   "autoGenerate": false,
   "inputMode": "frames",
-  "frameIntervalSec": 5,
-  "maxFrames": 6,
+  "frameIntervalSec": 1,
+  "maxFrames": 2,
   "maxProvocations": 12,
   "maxTranscriptChars": 12000
 }

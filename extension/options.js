@@ -12,12 +12,14 @@ async function loadSettings() {
     result[STORAGE_KEY] ?? {
       provider: "gemini",
       model: "gemini-3-flash",
+      liveModel: "gemini-2.5-flash-native-audio-preview-12-2025",
       apiKey: "",
+      enableSearchGrounding: true,
       autoOn: true,
       autoGenerate: false,
       inputMode: "frames",
-      frameIntervalSec: 5,
-      maxFrames: 6,
+      frameIntervalSec: 1,
+      maxFrames: 2,
       maxProvocations: 12,
       maxTranscriptChars: 12000
     }
@@ -38,7 +40,9 @@ async function main() {
 
   $("provider").value = settings.provider ?? "gemini";
   $("model").value = settings.model ?? "gemini-3-flash";
+  $("liveModel").value = settings.liveModel ?? "gemini-2.5-flash-native-audio-preview-12-2025";
   $("apiKey").value = settings.apiKey ?? "";
+  $("enableSearchGrounding").checked = Boolean(settings.enableSearchGrounding);
   $("autoOn").checked = Boolean(settings.autoOn);
   $("autoGenerate").checked = Boolean(settings.autoGenerate);
   $("inputMode").value = settings.inputMode ?? "frames";
@@ -55,7 +59,9 @@ async function main() {
     const next = {
       provider: $("provider").value,
       model: $("model").value.trim(),
+      liveModel: $("liveModel").value.trim(),
       apiKey: $("apiKey").value.trim(),
+      enableSearchGrounding: $("enableSearchGrounding").checked,
       autoOn: $("autoOn").checked,
       autoGenerate: $("autoGenerate").checked,
       inputMode: $("inputMode").value,

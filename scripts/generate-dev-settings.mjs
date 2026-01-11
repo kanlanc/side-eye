@@ -39,12 +39,14 @@ async function main() {
   const devSettings = {
     provider: "gemini",
     model,
+    liveModel: "gemini-2.5-flash-native-audio-preview-12-2025",
     apiKey,
+    enableSearchGrounding: true,
     autoOn: true,
     autoGenerate: false,
     inputMode: "frames",
-    frameIntervalSec: 5,
-    maxFrames: 6,
+    frameIntervalSec: 1,
+    maxFrames: 2,
     maxProvocations: 12,
     maxTranscriptChars: 12000
   };

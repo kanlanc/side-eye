@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Provocations (YouTube)",
   "version": "0.1.0",
-  "description": "Injects a thinking panel into YouTube to generate provocations and chat grounded in the video transcript.",
+  "description": "Injects a thinking panel into YouTube to generate provocations and chat grounded in video frames (transcript optional).",
   "action": {
     "default_title": "Provocations"
   },
@@ -18,7 +18,7 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://www.youtube.com/watch*"],
+      "matches": ["https://www.youtube.com/*"],
       "js": ["contentScript.js"],
       "run_at": "document_idle"
     }

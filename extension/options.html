@@ -23,17 +23,35 @@
         </label>
 
         <label class="field">
-          <div class="label">Model name</div>
+          <div class="label">Background model (structured)</div>
           <input id="model" placeholder="e.g. gemini-3-flash" autocomplete="off" />
-          <div class="hint">Set this to the exact model ID in your Google AI Studio / Gemini API project.</div>
+          <div class="hint">Used for provocations + richer context (supports structured JSON outputs).</div>
+        </label>
+
+        <label class="field">
+          <div class="label">Live model (low-latency)</div>
+          <input
+            id="liveModel"
+            placeholder="e.g. gemini-2.5-flash-native-audio-preview-12-2025"
+            autocomplete="off"
+          />
+          <div class="hint">Optional. Used for frequent small “what’s happening now?” observations.</div>
         </label>
 
         <label class="field">
           <div class="label">API key</div>
-          <input id="apiKey" placeholder="AIza..." autocomplete="off" />
+          <input id="apiKey" type="password" placeholder="AIza..." autocomplete="off" />
           <div class="hint">
             Stored in <code>chrome.storage.local</code> (not encrypted). Avoid using keys with high quotas/spending limits.
             You can clear it anytime.
+          </div>
+        </label>
+
+        <label class="field row">
+          <input id="enableSearchGrounding" type="checkbox" />
+          <div>
+            <div class="label">Enable Google Search grounding (background)</div>
+            <div class="hint">Lets the background model look up web info for richer context.</div>
           </div>
         </label>
 
@@ -49,7 +67,7 @@
           <input id="autoGenerate" type="checkbox" />
           <div>
             <div class="label">Auto-generate provocations</div>
-            <div class="hint">Runs once per page load when a transcript is available (may cost tokens).</div>
+            <div class="hint">Runs once per video page load (may cost tokens).</div>
           </div>
         </label>
 
@@ -66,13 +84,13 @@
         <label class="field">
           <div class="label">Frame interval (seconds)</div>
           <input id="frameIntervalSec" type="number" min="1" max="30" step="1" />
-          <div class="hint">How often to capture a frame while generating.</div>
+          <div class="hint">Delay between captured frames while generating (only applies if capturing multiple frames).</div>
         </label>
 
         <label class="field">
           <div class="label">Max frames per run</div>
           <input id="maxFrames" type="number" min="1" max="12" step="1" />
-          <div class="hint">Total frames sent to the model per Generate.</div>
+          <div class="hint">How many frames to send per Generate (if the video is paused, it will only use 1).</div>
         </label>
 
         <label class="field">

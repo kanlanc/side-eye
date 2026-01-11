@@ -874,6 +874,7 @@ ${recent}
 
       // Best-effort: prompt the player to load metadata so duration becomes available.
       if (!Number.isFinite(video.duration) || video.duration <= 0) {
+        const wasPausedInitially = video.paused;
         try {
           const ready = new Promise((resolve) =>
             video.addEventListener("loadedmetadata", () => resolve(true), { once: true })
@@ -882,7 +883,7 @@ ${recent}
           await Promise.race([ready, sleep(1500)]);
         } catch {}
         try {
-          video.pause();
+          if (wasPausedInitially) video.pause();
         } catch {}
       }
 
@@ -921,7 +922,15 @@ ${recent}
           video.currentTime = originalTime;
           await Promise.race([seeked, sleep(2000)]);
         } catch {}
-        if (!wasPaused) video.play().catch(() => {});
+        if (!wasPaused) {
+          try {
+            await video.play();
+          } catch {
+            if (state.activeTab === "context") {
+              addInfo(ctxFeed, "Playback didn’t resume automatically after Quick scan. Press Play in the player.");
+            }
+          }
+        }
       }
 
       if (!frames.length) return;
@@ -1086,7 +1095,9 @@ ${stampList}
         tryAttach();
       } else {
         stopRevealLoop();
-        startContextLoop();
+        // Only run the background context loop when the user is actually on the Context tab.
+        if (state.activeTab === "context") startContextLoop();
+        else stopContextLoop();
       }
     } else {
       stopContextLoop();
@@ -1102,7 +1113,13 @@ ${stampList}
     secProv.classList.toggle("active", name === "provocations");
     secChat.classList.toggle("active", name === "chat");
     secCtx.classList.toggle("active", name === "context");
-    if (name === "context") renderContext();
+    const mode = state.settings?.inputMode ?? "frames";
+    if (name === "context") {
+      renderContext();
+      if (mode !== "youtube_url") startContextLoop();
+    } else {
+      stopContextLoop();
+    }
   }
 
   function addInfo(feed, text) {

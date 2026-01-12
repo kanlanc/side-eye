@@ -110,8 +110,29 @@ function el(tag, attrs = {}, children = []) {
   return node;
 }
 
+function hasExtensionRuntime() {
+  return typeof chrome !== "undefined" && chrome?.runtime && typeof chrome.runtime.sendMessage === "function";
+}
+
+function hasExtensionStorage() {
+  return typeof chrome !== "undefined" && chrome?.storage?.local;
+}
+
+async function runtimeSendMessage(message) {
+  if (!hasExtensionRuntime()) {
+    throw new Error("Extension runtime unavailable (did you reload the extension?). Refresh this YouTube tab.");
+  }
+  const resp = await Promise.race([
+    chrome.runtime.sendMessage(message),
+    sleep(120_000).then(() => {
+      throw new Error("Extension request timed out. Reload the extension service worker and refresh the YouTube tab.");
+    })
+  ]);
+  return resp;
+}
+
 async function getSettings() {
-  const resp = await chrome.runtime.sendMessage({ type: "provocations:getSettings" });
+  const resp = await runtimeSendMessage({ type: "provocations:getSettings" });
   if (!resp?.ok) throw new Error(resp?.error ?? "Failed to read settings");
   return resp.settings;
 }
@@ -357,6 +378,7 @@ function contextKey(videoId) {
 
 async function loadVideoContext(videoId) {
   if (!videoId) return null;
+  if (!hasExtensionStorage()) throw new Error("Extension storage unavailable. Refresh this tab.");
   const key = contextKey(videoId);
   const result = await chrome.storage.local.get(key);
   return result[key] ?? null;
@@ -364,12 +386,14 @@ async function loadVideoContext(videoId) {
 
 async function saveVideoContext(videoId, ctx) {
   if (!videoId) return;
+  if (!hasExtensionStorage()) throw new Error("Extension storage unavailable. Refresh this tab.");
   const key = contextKey(videoId);
   await chrome.storage.local.set({ [key]: ctx });
 }
 
 async function pruneOldVideoContexts({ keep = 25 } = {}) {
   try {
+    if (!hasExtensionStorage()) return;
     const all = await chrome.storage.local.get(null);
     const entries = [];
     for (const [key, value] of Object.entries(all)) {
@@ -551,10 +575,42 @@ function ensurePanel(settings, dockContainer) {
       border-bottom: 1px solid rgba(255,255,255,0.10);
       gap: 10px;
     }
+    .topbarLeft {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      min-width: 0;
+    }
     .title {
       font-size: 12px;
       font-weight: 700;
       letter-spacing: 0.2px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .status {
+      display: none;
+      font-size: 11px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.10);
+      background: rgba(0,0,0,0.18);
+      color: rgba(232,232,238,0.82);
+      max-width: 220px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .status.error {
+      border-color: rgba(239,68,68,0.35);
+      background: rgba(239,68,68,0.12);
+      color: rgba(255,255,255,0.92);
+    }
+    .status.ok {
+      border-color: rgba(34,197,94,0.30);
+      background: rgba(34,197,94,0.10);
+      color: rgba(255,255,255,0.92);
     }
     .tabs {
       display: flex;
@@ -669,6 +725,8 @@ function ensurePanel(settings, dockContainer) {
     videoListenerCleanup: null
   };
   state.streams = new Map();
+  state.statusTimer = null;
+  state.lastStatusAt = 0;
 
   const panel = el("div", { class: "wrap" }, []);
   const launcher = el("div", { class: "launcher" }, []);
@@ -678,13 +736,16 @@ function ensurePanel(settings, dockContainer) {
 
   const panelBox = el("div", { class: "panel" }, []);
   const topbar = el("div", { class: "topbar" }, []);
+  const topbarLeft = el("div", { class: "topbarLeft" }, []);
   const title = el("div", { class: "title", text: "Provocations — YouTube" }, []);
+  const statusEl = el("div", { class: "status", text: "" }, []);
   const tabs = el("div", { class: "tabs" }, []);
   const tabProv = el("button", { class: "tab active", text: "Provocations" }, []);
   const tabChat = el("button", { class: "tab", text: "Chat" }, []);
   const tabCtx = el("button", { class: "tab", text: "Context" }, []);
   tabs.append(tabProv, tabChat, tabCtx);
-  topbar.append(title, tabs);
+  topbarLeft.append(title, statusEl);
+  topbar.append(topbarLeft, tabs);
 
   const body = el("div", { class: "body" }, []);
   const secProv = el("div", { class: "section active" }, []);
@@ -749,6 +810,27 @@ function ensurePanel(settings, dockContainer) {
     }
   }
 
+  function setStatus(text, { kind = "info", sticky = false, minIntervalMs = 0 } = {}) {
+    const now = Date.now();
+    if (text && minIntervalMs > 0 && now - (state.lastStatusAt ?? 0) < minIntervalMs) return;
+    state.lastStatusAt = now;
+
+    if (state.statusTimer) {
+      clearTimeout(state.statusTimer);
+      state.statusTimer = null;
+    }
+
+    const msg = String(text ?? "").trim();
+    statusEl.textContent = msg;
+    statusEl.classList.toggle("error", kind === "error");
+    statusEl.classList.toggle("ok", kind === "ok");
+    statusEl.style.display = msg ? "inline-flex" : "none";
+
+    if (msg && !sticky) {
+      state.statusTimer = setTimeout(() => setStatus(""), 4500);
+    }
+  }
+
   async function updateVideoContextFromCurrentFrame({ reason }) {
     if (state.contextBusy) return;
     state.contextBusy = true;
@@ -806,7 +888,18 @@ Reason: ${JSON.stringify(reason)}
       }
       state.contextLastMs = tStartMs;
     } catch (err) {
+      const msg = String(err?.message ?? err);
+      if (msg.includes("Extension runtime unavailable") || msg.includes("Extension storage unavailable")) {
+        stopContextLoop();
+        if (state.activeTab === "context") {
+          addInfo(ctxFeed, "Extension reloaded/updated. Refresh this YouTube tab to restore background context.");
+        }
+        setStatus("Refresh tab to restore context", { kind: "error", minIntervalMs: 2500 });
+        return;
+      }
       console.warn("[provocations] Context update failed:", err);
+      if (state.activeTab === "context") addInfo(ctxFeed, `Context update failed: ${msg}`);
+      setStatus(`Context error: ${msg}`, { kind: "error", minIntervalMs: 5000 });
     } finally {
       state.contextBusy = false;
     }
@@ -856,7 +949,18 @@ ${recent}
       await saveVideoContext(state.videoId, state.videoContext);
       if (state.activeTab === "context") renderContext();
     } catch (err) {
+      const msg = String(err?.message ?? err);
+      if (msg.includes("Extension runtime unavailable") || msg.includes("Extension storage unavailable")) {
+        stopContextLoop();
+        if (state.activeTab === "context") {
+          addInfo(ctxFeed, "Extension reloaded/updated. Refresh this YouTube tab to restore background context.");
+        }
+        setStatus("Refresh tab to restore context", { kind: "error", minIntervalMs: 2500 });
+        return;
+      }
       console.warn("[provocations] Context summarize failed:", err);
+      if (state.activeTab === "context") addInfo(ctxFeed, `Context summarize failed: ${msg}`);
+      setStatus(`Context error: ${msg}`, { kind: "error", minIntervalMs: 5000 });
     } finally {
       state.summaryBusy = false;
     }
@@ -1385,7 +1489,7 @@ ${stampList}
   }
 
   async function runModelText({ parts, modelOverride, disableSearchGrounding = false, generationConfig }) {
-    const resp = await chrome.runtime.sendMessage({
+    const resp = await runtimeSendMessage({
       type: "provocations:generate",
       payload: {
         contents: [{ role: "user", parts }],
@@ -1402,24 +1506,28 @@ ${stampList}
   }
 
   async function runModelJSONFromParts({ parts, modelOverride, disableSearchGrounding = false, maxOutputTokens = 4096 }) {
-    const resp = await chrome.runtime.sendMessage({
+    const resp = await runtimeSendMessage({
       type: "provocations:generate",
       payload: {
         contents: [{ role: "user", parts }],
         modelOverride,
         disableSearchGrounding,
-        generationConfig: { temperature: 0.2, maxOutputTokens, responseMimeType: "application/json" }
+        generationConfig: {
+          temperature: 0.2,
+          maxOutputTokens,
+          responseMimeType: "application/json"
+        }
       }
     });
     if (!resp?.ok) throw new Error(resp?.error ?? "Model call failed");
-    const text =
-      resp.data?.candidates?.[0]?.content?.parts?.map((p) => p.text).filter(Boolean).join("") ??
-      "";
-    return text;
+    const cand = resp.data?.candidates?.[0] ?? null;
+    const text = cand?.content?.parts?.map((p) => p.text).filter(Boolean).join("") ?? "";
+    const finishReason = String(cand?.finishReason ?? cand?.finish_reason ?? "");
+    return { text, finishReason };
   }
 
   async function runModelJSON(promptText, { modelOverride, disableSearchGrounding = false } = {}) {
-    const resp = await chrome.runtime.sendMessage({
+    const resp = await runtimeSendMessage({
       type: "provocations:generate",
       payload: {
         contents: [{ role: "user", parts: [{ text: promptText }] }],
@@ -1449,7 +1557,7 @@ ${stampList}
       });
     }
 
-    const resp = await chrome.runtime.sendMessage({
+    const resp = await runtimeSendMessage({
       type: "provocations:generate",
       payload: {
         contents: [{ role: "user", parts }],
@@ -1530,6 +1638,7 @@ ${stampList}
   }
 
   async function repairProvocationsJson({ rawModelText }) {
+    const snippet = String(rawModelText ?? "").slice(0, 14000);
     const prompt = `
 You will be given a model response that was SUPPOSED to be valid JSON but is malformed or truncated.
 
@@ -1540,7 +1649,7 @@ Task:
 - If the input is truncated and you cannot recover, return: { "provocations": [] }
 
 Malformed input:
-${rawModelText}
+${snippet}
     `.trim();
     return await runModelJSON(prompt, { disableSearchGrounding: true });
   }
@@ -1548,14 +1657,18 @@ ${rawModelText}
   async function generateProvocations({ reason = "manual" } = {}) {
     if (state.busy) return;
     state.busy = true;
+    genBtn.disabled = true;
+    refreshBtn.disabled = true;
     try {
       provFeed.replaceChildren();
 
       const goal = goalInput.value.trim();
       addInfo(provFeed, reason === "auto" ? "Loading provocations…" : "Generating provocations…");
+      setStatus(reason === "auto" ? "Loading…" : "Generating…", { sticky: true });
 
       if (!state.videoContext) await initVideoContext();
-      const baseContext = state.videoContext?.summary ? String(state.videoContext.summary) : "";
+      const baseContextRaw = state.videoContext?.summary ? String(state.videoContext.summary) : "";
+      const baseContext = clampText(baseContextRaw, 1400);
 
       const inputMode = state.settings.inputMode ?? "frames";
       if (inputMode === "youtube_url") {
@@ -1570,31 +1683,38 @@ ${rawModelText}
         const token = (state.deepPassToken += 1);
         const quickModel = state.settings?.model ? String(state.settings.model).trim() : "";
         const deepModel = state.settings?.deepModel ? String(state.settings.deepModel).trim() : "";
-        const requestedCount = Math.min(20, Math.max(6, Number(state.settings.maxProvocations ?? 12)));
+
+        const requestedCount = Math.min(10, Math.max(4, Number(state.settings.maxProvocations ?? 8)));
         const video = document.querySelector("video");
         const durationMs =
           video && Number.isFinite(video.duration) && video.duration > 0 ? Math.floor(video.duration * 1000) : null;
 
-        const prompt = `
+        function buildPrompt(count) {
+          return `
 You are a critical-thinking coach embedded in a YouTube sidebar. Watch the provided YouTube video (audio + visuals) and create "provocations": short, high-leverage challenges that make the viewer think (productive resistance), not a summary.
 
 Rules:
 - Ground each provocation in what is actually said/shown in the video.
 - 1-2 sentences each, must include at least one question.
+- Keep fields short to avoid truncation:
+  - title <= 60 chars
+  - prompt <= 240 chars
+  - excerpt <= 180 chars
 - Avoid generic epistemology prompts unless the video itself is about epistemology.
 - Do NOT mention transcripts being missing.
-- Return exactly ${requestedCount} provocations, spread across the whole video (early/mid/late).
+- Return exactly ${count} provocations, spread across the whole video (early/mid/late).
 - Output MUST be valid JSON. JSON strings MUST NOT contain literal newlines.
+- Output MUST be a single-line JSON object (no markdown, no trailing commentary).
+- If you cannot access/watch the video, return: { "provocations": [] }
 
 Output JSON ONLY with this shape:
 {
-  "summary": "- ...\\n- ...",
   "provocations": [
     {
       "type": "Assumption|Counterargument|MissingEvidence|Ambiguity|AlternativeExplanation|Falsifiability|BiasIncentives|Implications",
       "title": "short headline",
       "prompt": "the provocation text",
-      "evidence": "a short quote with timestamp like [MM:SS] ... OR a brief description of the moment",
+      "excerpt": "a short quote with timestamp like [MM:SS] ... OR a brief description of the moment",
       "tStartMs": 123000
     }
   ]
@@ -1609,36 +1729,132 @@ ${baseContext}
 </context>
 
 Viewer goal (optional): ${goal ? JSON.stringify(goal) : "\"\""}
-        `.trim();
+          `.trim();
+        }
+
+        async function callSegmented({ totalCount, maxOutputTokens = 4096 }) {
+          const segments = durationMs ? Math.min(4, Math.max(2, Math.ceil(totalCount / 3))) : Math.min(3, Math.ceil(totalCount / 3));
+          const per = Math.max(1, Math.ceil(totalCount / segments));
+          const out = [];
+
+          for (let i = 0; i < segments; i += 1) {
+            if (token !== state.deepPassToken) break;
+            const count = Math.min(per, totalCount - out.length);
+            if (count <= 0) break;
+
+            const rangeStart = durationMs ? Math.floor((i / segments) * durationMs) : null;
+            const rangeEnd = durationMs ? Math.floor(((i + 1) / segments) * durationMs) : null;
+
+            const segmentPrompt = [
+              buildPrompt(count),
+              "",
+              rangeStart !== null && rangeEnd !== null
+                ? `Additional rule: All returned provocations MUST have tStartMs between ${rangeStart} and ${rangeEnd}.`
+                : `Additional rule: Focus on a different part of the video than prior segments (cover early/mid/late).`
+            ].join("\n");
+
+            setStatus(`Generating ${i + 1}/${segments}…`, { sticky: true, minIntervalMs: 800 });
+            addInfo(provFeed, `Generating segment ${i + 1}/${segments}…`);
+
+            async function fetchSegment({ segmentMaxOutputTokens, attempt }) {
+              const attemptParts = [parts[0], { text: segmentPrompt }];
+              let raw = "";
+              let finishReason = "";
+              try {
+                ({ text: raw, finishReason } = await runModelJSONFromParts({
+                  parts: attemptParts,
+                  modelOverride: quickModel || undefined,
+                  disableSearchGrounding: true,
+                  maxOutputTokens: segmentMaxOutputTokens
+                }));
+              } catch {
+                ({ text: raw, finishReason } = await runModelJSONFromParts({
+                  parts: attemptParts,
+                  disableSearchGrounding: true,
+                  maxOutputTokens: segmentMaxOutputTokens
+                }));
+              }
+
+              try {
+                return parseJsonFromModelText(raw);
+              } catch (parseErr) {
+                const cleaned = String(raw ?? "").trim();
+                console.warn("[provocations] Model returned non-JSON:", clampText(cleaned, 1400));
+                if (attempt === 0) {
+                  if (finishReason) addInfo(provFeed, `Segment ${i + 1} ended: ${finishReason}. Retrying…`);
+                  addInfo(provFeed, `Segment ${i + 1} malformed; retrying…`);
+                  return await fetchSegment({ segmentMaxOutputTokens: Math.min(6144, segmentMaxOutputTokens * 2), attempt: 1 });
+                }
+                addInfo(provFeed, `Model output malformed (segment ${i + 1}); attempting to repair…`);
+                setStatus("Repairing output…", { sticky: true });
+                const repaired = await repairProvocationsJson({ rawModelText: cleaned });
+                return parseJsonFromModelText(repaired);
+              }
+            }
+
+            const data = await fetchSegment({ segmentMaxOutputTokens: maxOutputTokens, attempt: 0 });
+            const segItems = Array.isArray(data?.provocations) ? data.provocations : [];
+            out.push(...segItems);
+          }
+
+          return out;
+        }
 
         const parts = [
           { fileData: { fileUri: state.videoUrl, mimeType: "video/mp4" } },
-          { text: prompt }
+          { text: buildPrompt(requestedCount) }
         ];
 
-        let raw = "";
-        try {
-          raw = await runModelJSONFromParts({
-            parts,
-            modelOverride: quickModel || undefined,
-            disableSearchGrounding: true,
-            maxOutputTokens: 4096
-          });
-        } catch {
-          raw = await runModelJSONFromParts({ parts, disableSearchGrounding: true, maxOutputTokens: 4096 });
+        async function callAndParse({ maxOutputTokens, count, label }) {
+          const attemptParts = [parts[0], { text: buildPrompt(count) }];
+          let raw = "";
+          let finishReason = "";
+          try {
+            ({ text: raw, finishReason } = await runModelJSONFromParts({
+              parts: attemptParts,
+              modelOverride: quickModel || undefined,
+              disableSearchGrounding: true,
+              maxOutputTokens
+            }));
+          } catch {
+            ({ text: raw, finishReason } = await runModelJSONFromParts({
+              parts: attemptParts,
+              disableSearchGrounding: true,
+              maxOutputTokens
+            }));
+          }
+
+          try {
+            return { data: parseJsonFromModelText(raw), raw };
+          } catch (parseErr) {
+            const cleaned = String(raw ?? "").trim();
+            console.warn("[provocations] Model returned non-JSON:", clampText(cleaned, 1400));
+            if (finishReason) addInfo(provFeed, `Model ended: ${finishReason}.`);
+            addInfo(provFeed, `Model output was malformed (${label}); attempting to repair…`);
+            setStatus("Repairing output…", { sticky: true });
+            let repaired = "";
+            try {
+              repaired = await repairProvocationsJson({ rawModelText: cleaned });
+              return { data: parseJsonFromModelText(repaired), raw: repaired };
+            } catch (repairErr) {
+              const msg = String(repairErr?.message ?? repairErr);
+              throw new Error(`Model JSON failed (${label}): ${msg}`);
+            }
+          }
         }
 
+        // Default to segmented generation to reduce truncation risk.
         let data;
         try {
-          data = parseJsonFromModelText(raw);
-        } catch {
-          const cleaned = String(raw ?? "").trim();
-          console.warn("[provocations] Model returned non-JSON:", cleaned);
-          const repaired = await repairProvocationsJson({ rawModelText: cleaned });
-          data = parseJsonFromModelText(repaired);
+          const segItems = await callSegmented({ totalCount: requestedCount, maxOutputTokens: 4096 });
+          data = { provocations: segItems };
+        } catch (err) {
+          // Fallback: try a single-shot request if segmented fails (should be rare).
+          addInfo(provFeed, "Segmented generation failed; retrying single request…");
+          setStatus("Retrying…", { sticky: true });
+          ({ data } = await callAndParse({ maxOutputTokens: 6144, count: Math.max(4, Math.floor(requestedCount / 2)), label: "fallback" }));
         }
 
-        const summary = typeof data?.summary === "string" ? data.summary.trim() : "";
         const items = Array.isArray(data?.provocations) ? data.provocations : [];
         const normalized = items
           .map((p) => {
@@ -1650,16 +1866,18 @@ Viewer goal (optional): ${goal ? JSON.stringify(goal) : "\"\""}
               type: String(p?.type ?? "Provocation"),
               title: String(p?.title ?? p?.headline ?? "Untitled"),
               prompt: String(p?.prompt ?? p?.text ?? "").trim(),
-              excerpt: String(p?.evidence ?? p?.excerpt ?? "").trim(),
+              excerpt: String(p?.excerpt ?? p?.evidence ?? "").trim(),
               tStartMs: typeof tStartMs === "number" && Number.isFinite(tStartMs) ? tStartMs : 0
             };
           })
           .filter((p) => p.prompt);
 
         const deck = normalizeProvocationDeck(normalized).slice(0, requestedCount);
+        if (!deck.length) {
+          throw new Error("Model returned zero provocations. Try again, or switch Input mode to Video frames (fallback).");
+        }
 
         if (state.videoContext) {
-          state.videoContext.summary = summary || state.videoContext.summary || "";
           state.videoContext.updatedAt = Date.now();
           state.videoContext.lastSummaryAt = Date.now();
           state.videoContext.deck = deck;
@@ -1673,15 +1891,17 @@ Viewer goal (optional): ${goal ? JSON.stringify(goal) : "\"\""}
             ? `${deck.length} provocations ready (quick pass) — deep pass running in background.`
             : `${deck.length} provocations ready — play to reveal them as you watch.`
         });
+        setStatus(deepModel ? "Deep pass running…" : "Ready", { kind: "ok" });
 
         if (deepModel && deepModel !== quickModel) {
           void (async () => {
             try {
-              const deepRaw = await runModelJSONFromParts({
-                parts,
+              const deepParts = [parts[0], { text: buildPrompt(Math.min(10, requestedCount)) }];
+              const { text: deepRaw } = await runModelJSONFromParts({
+                parts: deepParts,
                 modelOverride: deepModel,
                 disableSearchGrounding: false,
-                maxOutputTokens: 6144
+                maxOutputTokens: 4096
               });
               if (token !== state.deepPassToken) return;
 
@@ -1690,13 +1910,12 @@ Viewer goal (optional): ${goal ? JSON.stringify(goal) : "\"\""}
                 deepData = parseJsonFromModelText(deepRaw);
               } catch {
                 const cleaned = String(deepRaw ?? "").trim();
-                console.warn("[provocations] Deep pass returned non-JSON:", cleaned);
+                console.warn("[provocations] Deep pass returned non-JSON:", clampText(cleaned, 1400));
+                setStatus("Deep pass output malformed; repairing…", { sticky: true, minIntervalMs: 2500 });
                 const repaired = await repairProvocationsJson({ rawModelText: cleaned });
                 deepData = parseJsonFromModelText(repaired);
               }
 
-              const deepSummary =
-                typeof deepData?.summary === "string" ? deepData.summary.trim() : summary || state.videoContext?.summary || "";
               const deepItems = Array.isArray(deepData?.provocations) ? deepData.provocations : [];
               const deepNormalized = deepItems
                 .map((p) => {
@@ -1708,7 +1927,7 @@ Viewer goal (optional): ${goal ? JSON.stringify(goal) : "\"\""}
                     type: String(p?.type ?? "Provocation"),
                     title: String(p?.title ?? p?.headline ?? "Untitled"),
                     prompt: String(p?.prompt ?? p?.text ?? "").trim(),
-                    excerpt: String(p?.evidence ?? p?.excerpt ?? "").trim(),
+                    excerpt: String(p?.excerpt ?? p?.evidence ?? "").trim(),
                     tStartMs: typeof tStartMs === "number" && Number.isFinite(tStartMs) ? tStartMs : 0
                   };
                 })
@@ -1718,7 +1937,6 @@ Viewer goal (optional): ${goal ? JSON.stringify(goal) : "\"\""}
               if (!deepDeck.length) return;
 
               if (state.videoContext) {
-                state.videoContext.summary = deepSummary || state.videoContext.summary || "";
                 state.videoContext.updatedAt = Date.now();
                 state.videoContext.lastSummaryAt = Date.now();
                 state.videoContext.deck = deepDeck;
@@ -1730,9 +1948,13 @@ Viewer goal (optional): ${goal ? JSON.stringify(goal) : "\"\""}
               setDeckAndRender(deepDeck, {
                 intro: `${deepDeck.length} provocations ready (deep pass) — play to reveal them as you watch.`
               });
+              setStatus("Updated (deep pass)", { kind: "ok" });
             } catch (err) {
               if (token !== state.deepPassToken) return;
               console.warn("[provocations] Deep pass failed:", err);
+              const msg = String(err?.message ?? String(err));
+              setStatus(`Deep pass failed: ${msg}`, { kind: "error", minIntervalMs: 2500 });
+              addInfo(provFeed, `Deep pass failed: ${msg}`);
             }
           })();
         }
@@ -1818,6 +2040,8 @@ ${wantsTranscript ? `\nTranscript (untrusted):\n<transcript>\n${transcriptText}\
       } catch {
         const cleaned = String(raw ?? "").trim();
         console.warn("[provocations] Model returned non-JSON:", cleaned);
+        addInfo(provFeed, "Model output was malformed; attempting to repair…");
+        setStatus("Repairing output…", { sticky: true });
         const repaired = await repairProvocationsJson({ rawModelText: cleaned });
         data = parseJsonFromModelText(repaired);
       }
@@ -1830,16 +2054,27 @@ ${wantsTranscript ? `\nTranscript (untrusted):\n<transcript>\n${transcriptText}\
       }
       const maxCount = Math.min(30, Math.max(3, Number(state.settings.maxProvocations ?? 12)));
       for (const p of items.slice(0, maxCount)) addProvocationCard(p);
+      setStatus("Ready", { kind: "ok" });
     } catch (err) {
       provFeed.replaceChildren();
-      addInfo(provFeed, `Generate failed: ${err?.message ?? String(err)}`);
+      const msg = String(err?.message ?? String(err));
+      addInfo(provFeed, `Generate failed: ${msg}`);
+      setStatus(`Generate failed: ${msg}`, { kind: "error" });
       addInfo(provFeed, "Debug: open DevTools Console and search for [provocations] to see the raw model output.");
-      const msg = String(err?.message ?? "");
-      if (msg.includes("Missing API key") || msg.includes("Missing model")) {
+      const hint = String(err?.message ?? "");
+      if (hint.includes("Missing API key") || hint.includes("Missing model")) {
         addInfo(provFeed, "Open Extension options to check Gemini settings.");
       }
     } finally {
       state.busy = false;
+      genBtn.disabled = false;
+      refreshBtn.disabled = false;
+      if (!state.busy) {
+        // If we left a sticky status hanging, let it auto-clear soon.
+        if (statusEl.style.display !== "none" && String(statusEl.textContent ?? "").includes("Generating")) {
+          setStatus(String(statusEl.textContent ?? ""), { sticky: false });
+        }
+      }
     }
   }
 
@@ -1850,6 +2085,7 @@ ${wantsTranscript ? `\nTranscript (untrusted):\n<transcript>\n${transcriptText}\
     chatInput.value = "";
 
     state.busy = true;
+    chatSend.disabled = true;
     try {
       addChat("user", q);
       const inputMode = state.settings.inputMode ?? "frames";
@@ -1907,7 +2143,7 @@ ${q}
         });
       }
 
-      const resp = await chrome.runtime.sendMessage({
+      const resp = await runtimeSendMessage({
         type: "provocations:streamGenerate",
         payload: {
           requestId,
@@ -1921,6 +2157,7 @@ ${q}
       addChat("ai", `Error: ${err?.message ?? String(err)}`);
     } finally {
       state.busy = false;
+      chatSend.disabled = false;
     }
   }
 
@@ -1987,6 +2224,7 @@ let didAutoLoadTranscript = false;
 
 async function main() {
   if (!isWatchPage()) return;
+  if (!hasExtensionRuntime()) return;
   if (mainRunning) return;
   mainRunning = true;
 

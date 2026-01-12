@@ -4,7 +4,7 @@ const DEFAULT_SETTINGS = {
   provider: "gemini",
   model: "gemini-3-flash",
   deepModel: "gemini-3-pro-preview",
-  liveModel: "gemini-2.5-flash-native-audio-preview-12-2025",
+  liveModel: "gemini-3-flash",
   apiKey: "",
   enableSearchGrounding: true,
   autoOn: true,
@@ -51,20 +51,19 @@ function normalizeGenerationConfig(cfg) {
   const out = { ...inCfg };
 
   function mapKey(from, to) {
-    if (Object.prototype.hasOwnProperty.call(inCfg, from) && !Object.prototype.hasOwnProperty.call(inCfg, to)) {
-      out[to] = inCfg[from];
-    }
+    if (!Object.prototype.hasOwnProperty.call(inCfg, from)) return;
+    if (!Object.prototype.hasOwnProperty.call(inCfg, to)) out[to] = inCfg[from];
     delete out[from];
   }
 
-  mapKey("candidateCount", "candidate_count");
-  mapKey("maxOutputTokens", "max_output_tokens");
-  mapKey("topP", "top_p");
-  mapKey("topK", "top_k");
-  mapKey("presencePenalty", "presence_penalty");
-  mapKey("frequencyPenalty", "frequency_penalty");
-  mapKey("responseMimeType", "response_mime_type");
-  mapKey("responseSchema", "response_schema");
+  mapKey("candidate_count", "candidateCount");
+  mapKey("max_output_tokens", "maxOutputTokens");
+  mapKey("top_p", "topP");
+  mapKey("top_k", "topK");
+  mapKey("presence_penalty", "presencePenalty");
+  mapKey("frequency_penalty", "frequencyPenalty");
+  mapKey("response_mime_type", "responseMimeType");
+  mapKey("response_schema", "responseSchema");
 
   return out;
 }
@@ -72,34 +71,33 @@ function normalizeGenerationConfig(cfg) {
 function normalizePart(part) {
   const p = part && typeof part === "object" ? { ...part } : {};
 
-  if (p.inlineData && !p.inline_data) {
-    const d = p.inlineData && typeof p.inlineData === "object" ? { ...p.inlineData } : {};
-    if (d.mimeType && !d.mime_type) d.mime_type = d.mimeType;
-    delete d.mimeType;
-    p.inline_data = d;
-    delete p.inlineData;
+  if (p.inline_data && !p.inlineData) {
+    const d = p.inline_data && typeof p.inline_data === "object" ? { ...p.inline_data } : {};
+    if (d.mime_type && !d.mimeType) d.mimeType = d.mime_type;
+    delete d.mime_type;
+    p.inlineData = d;
+    delete p.inline_data;
   }
 
-  if (p.fileData && !p.file_data) {
-    const d = p.fileData && typeof p.fileData === "object" ? { ...p.fileData } : {};
-    if (d.mimeType && !d.mime_type) d.mime_type = d.mimeType;
-    if (d.fileUri && !d.file_uri) d.file_uri = d.fileUri;
-    delete d.mimeType;
-    delete d.fileUri;
-    p.file_data = d;
-    delete p.fileData;
+  if (p.file_data && !p.fileData) {
+    const d = p.file_data && typeof p.file_data === "object" ? { ...p.file_data } : {};
+    if (d.mime_type && !d.mimeType) d.mimeType = d.mime_type;
+    if (d.file_uri && !d.fileUri) d.fileUri = d.file_uri;
+    delete d.mime_type;
+    delete d.file_uri;
+    p.fileData = d;
+    delete p.file_data;
   }
 
-  // Also normalize nested camelCase inside already-snake keys (harmless if absent)
-  if (p.inline_data && typeof p.inline_data === "object") {
-    if (p.inline_data.mimeType && !p.inline_data.mime_type) p.inline_data.mime_type = p.inline_data.mimeType;
-    delete p.inline_data.mimeType;
+  if (p.inlineData && typeof p.inlineData === "object") {
+    if (p.inlineData.mime_type && !p.inlineData.mimeType) p.inlineData.mimeType = p.inlineData.mime_type;
+    delete p.inlineData.mime_type;
   }
-  if (p.file_data && typeof p.file_data === "object") {
-    if (p.file_data.mimeType && !p.file_data.mime_type) p.file_data.mime_type = p.file_data.mimeType;
-    if (p.file_data.fileUri && !p.file_data.file_uri) p.file_data.file_uri = p.file_data.fileUri;
-    delete p.file_data.mimeType;
-    delete p.file_data.fileUri;
+  if (p.fileData && typeof p.fileData === "object") {
+    if (p.fileData.mime_type && !p.fileData.mimeType) p.fileData.mimeType = p.fileData.mime_type;
+    if (p.fileData.file_uri && !p.fileData.fileUri) p.fileData.fileUri = p.fileData.file_uri;
+    delete p.fileData.mime_type;
+    delete p.fileData.file_uri;
   }
 
   return p;
@@ -122,18 +120,25 @@ async function geminiGenerateContent({ apiKey, model, contents, tools, generatio
     model
   )}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 120_000);
   const resp = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    signal: controller.signal,
     body: JSON.stringify({
       contents: normalizeContents(contents),
       tools,
-      generation_config: normalizeGenerationConfig(generationConfig) ?? {
+      generationConfig: normalizeGenerationConfig(generationConfig) ?? {
         temperature: 0.6,
-        max_output_tokens: 1024
+        maxOutputTokens: 1024
       }
     })
+  }).catch((err) => {
+    if (controller.signal.aborted) throw new Error("Gemini request timed out.");
+    throw err;
   });
+  clearTimeout(timeout);
 
   const data = await resp.json().catch(() => null);
   if (!resp.ok) {
@@ -166,7 +171,7 @@ async function geminiStreamGenerateContentToTab({
     body: JSON.stringify({
       contents: normalizeContents(contents),
       tools,
-      generation_config: normalizeGenerationConfig(generationConfig) ?? { temperature: 0.4, max_output_tokens: 1024 }
+      generationConfig: normalizeGenerationConfig(generationConfig) ?? { temperature: 0.4, maxOutputTokens: 1024 }
     })
   });
 

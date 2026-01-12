@@ -2,7 +2,7 @@
   "provider": "gemini",
   "model": "gemini-3-flash",
   "deepModel": "gemini-3-pro-preview",
-  "liveModel": "gemini-2.5-flash-native-audio-preview-12-2025",
+  "liveModel": "gemini-3-flash",
   "apiKey": "AIza...YOUR_KEY_HERE",
   "enableSearchGrounding": true,
   "autoOn": true,

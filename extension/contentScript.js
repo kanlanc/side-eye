@@ -122,8 +122,20 @@ async function runtimeSendMessage(message) {
   if (!hasExtensionRuntime()) {
     throw new Error("Extension runtime unavailable (did you reload the extension?). Refresh this YouTube tab.");
   }
+  const send = () =>
+    new Promise((resolve, reject) => {
+      try {
+        chrome.runtime.sendMessage(message, (resp) => {
+          const err = chrome.runtime.lastError;
+          if (err) reject(new Error(err.message));
+          else resolve(resp);
+        });
+      } catch (e) {
+        reject(e);
+      }
+    });
   const resp = await Promise.race([
-    chrome.runtime.sendMessage(message),
+    send(),
     sleep(120_000).then(() => {
       throw new Error("Extension request timed out. Reload the extension service worker and refresh the YouTube tab.");
     })

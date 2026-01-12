@@ -12,7 +12,7 @@ async function loadSettings() {
     provider: "gemini",
     model: "gemini-3-flash",
     deepModel: "gemini-3-pro-preview",
-    liveModel: "gemini-2.5-flash-native-audio-preview-12-2025",
+    liveModel: "gemini-3-flash",
     apiKey: "",
     enableSearchGrounding: true,
     autoOn: true,
@@ -43,7 +43,7 @@ async function main() {
   $("provider").value = settings.provider ?? "gemini";
   $("model").value = settings.model ?? "gemini-3-flash";
   $("deepModel").value = settings.deepModel ?? "gemini-3-pro-preview";
-  $("liveModel").value = settings.liveModel ?? "gemini-2.5-flash-native-audio-preview-12-2025";
+  $("liveModel").value = settings.liveModel ?? "gemini-3-flash";
   $("apiKey").value = settings.apiKey ?? "";
   $("enableSearchGrounding").checked = Boolean(settings.enableSearchGrounding);
   $("autoOn").checked = Boolean(settings.autoOn);

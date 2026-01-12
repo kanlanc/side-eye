@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
-  "name": "Provocations (YouTube)",
+  "name": "SideEye",
   "version": "0.1.0",
-  "description": "Injects a thinking panel into YouTube to generate provocations and chat grounded in the actual video (captions optional).",
+  "description": "The gadfly of YouTube. Questions what you watch with AI-generated provocations grounded in the actual video.",
   "action": {
-    "default_title": "Provocations"
+    "default_title": "SideEye"
   },
   "options_page": "options.html",
   "permissions": ["storage"],

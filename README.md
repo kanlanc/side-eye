@@ -1,6 +1,6 @@
-# Provocations (YouTube) — Chrome Extension
+# SideEye — The Gadfly of YouTube
 
-YouTube-only Chrome extension that injects a lightweight side panel to:
+A Chrome extension that questions what you watch. SideEye injects a lightweight side panel to:
 
 - Generate **provocations** (thought-provoking critiques/questions) grounded in the **actual video** (audio + visuals).
 - Reveal those cards **as you watch** (time-synced), instead of dumping everything at once.
@@ -15,7 +15,7 @@ YouTube-only Chrome extension that injects a lightweight side panel to:
 
 ## Configure Gemini
 
-1. In `chrome://extensions`, open **Details** for “Provocations (YouTube)”
+1. In `chrome://extensions`, open **Details** for "SideEye"
 2. Click **Extension options**
 3. Set:
    - **API key**
@@ -36,7 +36,7 @@ Chrome extensions can’t read your shell environment directly. For local develo
 ## Use on YouTube
 
 - Go to any `youtube.com/watch?...` page.
-- Click **Provocations** (top-right) to open the panel.
+- Click **SideEye** (top-right) to open the panel.
 - Click **Generate** (or enable **Auto-generate** in options).
 - Cards appear automatically as you hit their timestamps; use **Jump** to seek.
 
@@ -51,10 +51,10 @@ Chrome extensions can’t read your shell environment directly. For local develo
 - Reload the extension after changes: `chrome://extensions` → **Reload**
 - On a YouTube video page:
   - Right-click → **Inspect** to see the content script logs
-  - `chrome://extensions` → “Provocations (YouTube)” → **service worker** → **Inspect** to see Gemini/network errors
+  - `chrome://extensions` → "SideEye" → **service worker** → **Inspect** to see Gemini/network errors
 - Quick sanity checks:
   - Click **Generate**, confirm cards appear and **Jump** seeks the video
-  - Switch to **Chat**, ask a question and confirm it responds (look for `[provocations]` logs on failures)
+  - Switch to **Chat**, ask a question and confirm it responds (look for `[sideeye]` logs on failures)
 
 ## Notes / limitations
 
